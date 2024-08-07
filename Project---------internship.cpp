@@ -1,0 +1,269 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
+#include <ctime>
+#include <fstream>
+
+using namespace std;
+using json = nlohmann::json;
+
+// Location class to store the information of a location
+class Location {
+public:
+    string name;
+    double latitude;
+    double longitude;
+
+    Location(string n, double lat, double lon) : name(n), latitude(lat), longitude(lon) {}
+};
+
+// LocationManager class to manage locations
+class LocationManager {
+private:
+    vector<Location> locations;
+
+public:
+    void addLocation(string name, double latitude, double longitude) {
+        locations.push_back(Location(name, latitude, longitude));
+    }
+
+    void removeLocation(string name) {
+        locations.erase(remove_if(locations.begin(), locations.end(), [&](Location& loc) {
+            return loc.name == name;
+        }), locations.end());
+    }
+
+    void listLocations() {
+        cout << "Locations:" << endl;
+        for (const auto& loc : locations) {
+            cout << "- " << loc.name << endl;
+        }
+    }
+
+    Location getLocationByName(const string& name) {
+        auto it = find_if(locations.begin(), locations.end(), [&](Location& loc) {
+            return loc.name == name;
+        });
+        if (it != locations.end()) {
+            return *it;
+        } else {
+            throw runtime_error("Location not found");
+        }
+    }
+};
+
+// WeatherVariable class to store weather parameters
+class WeatherVariable {
+public:
+    string name;
+    double value;
+
+    WeatherVariable(string n, double v) : name(n), value(v) {}
+};
+
+// WeatherVariableManager class to manage weather variables
+class WeatherVariableManager {
+private:
+    vector<WeatherVariable> variables;
+
+public:
+    void addVariable(string name, double value) {
+        auto it = find_if(variables.begin(), variables.end(), [&](WeatherVariable& var) {
+            return var.name == name;
+        });
+
+        if (it != variables.end()) {
+            it->value = value; // Update existing variable
+        } else {
+            variables.push_back(WeatherVariable(name, value)); // Add new variable
+        }
+    }
+
+    void listVariables() {
+        cout << "Weather Variables:" << endl;
+        for (const auto& var : variables) {
+            cout << "- " << var.name << ": " << var.value << endl;
+        }
+    }
+
+    const vector<WeatherVariable>& getVariables() const {
+        return variables;
+    }
+};
+
+// WeatherForecastingSystem class to fetch and process weather data
+class WeatherForecastingSystem {
+public:
+    void fetchWeatherData(const string& city, WeatherVariableManager& weatherVariableManager) {
+        string url = "https://api.openweathermap.org/data/2.5/weather?q=" + city + "&appid=fea45fbc875c7a8173e9e08f7e640de3&units=metric";
+
+        CURL* curl = curl_easy_init();
+        if (curl) {
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+
+            string response;
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+            CURLcode res = curl_easy_perform(curl);
+            if (res != CURLE_OK) {
+                cerr << "Failed to fetch data: " << curl_easy_strerror(res) << endl;
+            } else {
+                processWeatherData(response, weatherVariableManager);
+            }
+
+            curl_easy_cleanup(curl);
+        }
+    }
+
+    void fetchHistoricalData(const string& city, const LocationManager& locationManager, WeatherVariableManager& weatherVariableManager) {
+        try {
+            Location loc = locationManager.getLocationByName(city);
+
+            // Get current timestamp
+            time_t currentTime = time(nullptr);
+
+            string url = "https://api.openweathermap.org/data/2.5/onecall/timemachine?lat=" + to_string(loc.latitude) +
+                         "&lon=" + to_string(loc.longitude) + "&dt=" + to_string(currentTime) + "&appid=fea45fbc875c7a8173e9e08f7e640de3";
+
+            CURL* curl = curl_easy_init();
+            if (curl) {
+                curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+                curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+                curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+
+                string response;
+                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+                CURLcode res = curl_easy_perform(curl);
+                if (res != CURLE_OK) {
+                    cerr << "Failed to fetch data: " << curl_easy_strerror(res) << endl;
+                } else {
+                    processWeatherData(response, weatherVariableManager);
+                }
+
+                curl_easy_cleanup(curl);
+            }
+        } catch (const runtime_error& e) {
+            cerr << e.what() << endl;
+        }
+    }
+
+private:
+    static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        ((string*)userp)->append((char*)contents, size * nmemb);
+        return size * nmemb;
+    }
+
+    void processWeatherData(const string& data, WeatherVariableManager& weatherVariableManager) {
+        json j = json::parse(data);
+
+        if (j.find("main") != j.end() && j["main"].find("temp") != j["main"].end() && j.find("wind") != j.end() && j["wind"].find("speed") != j["wind"].end()) {
+            double temperature = j["main"]["temp"];
+            double windSpeed = j["wind"]["speed"];
+
+            // Update WeatherVariableManager with the fetched data
+            weatherVariableManager.addVariable("Temperature", temperature);
+            weatherVariableManager.addVariable("Wind Speed", windSpeed);
+
+            cout << "Weather Forecast:" << endl;
+            cout << "- Temperature: " << temperature << " °C" << endl;
+            cout << "- Wind Speed: " << windSpeed << " m/s" << endl;
+        } else {
+            cerr << "Failed to parse weather data." << endl;
+        }
+    }
+};
+
+// Function to export data to CSV format
+void exportToCSV(const vector<WeatherVariable>& variables) {
+    ofstream file("weather_data.csv");
+
+    if (file.is_open()) {
+        file << "Name,Value\n";
+        for (const auto& var : variables) {
+            file << var.name << "," << var.value << "\n";
+        }
+        file.close();
+        cout << "Data exported to weather_data.csv" << endl;
+    } else {
+        cerr << "Failed to open file for writing." << endl;
+    }
+}
+
+// Function to export data to JSON format
+void exportToJSON(const vector<WeatherVariable>& variables) {
+    json j;
+
+    for (const auto& var : variables) {
+        j[var.name] = var.value;
+    }
+
+    ofstream file("weather_data.json");
+
+    if (file.is_open()) {
+        file << j.dump(4);
+        file.close();
+        cout << "Data exported to weather_data.json" << endl;
+    } else {
+        cerr << "Failed to open file for writing." << endl;
+    }
+}
+
+int main() {
+    LocationManager locationManager;
+    WeatherVariableManager weatherVariableManager;
+    WeatherForecastingSystem weatherSystem;
+
+    // Adding predefined locations
+    locationManager.addLocation("Islamabad", 33.6844, 73.0479);
+    locationManager.addLocation("Lahore", 31.5497, 74.3436);
+    locationManager.addLocation("Karachi", 24.8607, 67.0011);
+    locationManager.addLocation("Peshawar", 34.0151, 71.5249);
+    locationManager.addLocation("Quetta", 30.1798, 66.9750);
+    locationManager.addLocation("Faisalabad", 31.4180, 73.0790);
+    locationManager.addLocation("Multan", 30.1575, 71.5249);
+    locationManager.addLocation("Rawalpindi", 33.5651, 73.0169);
+    locationManager.addLocation("Sialkot", 32.4945, 74.5229);
+    locationManager.addLocation("Sukkur", 27.7052, 68.8574);
+    locationManager.addLocation("Gujranwala", 32.1877, 74.1945);
+    locationManager.addLocation("Bahawalpur", 29.3956, 71.6836);
+    locationManager.addLocation("Sargodha", 32.0836, 72.6714);
+    locationManager.addLocation("Jhang", 31.2681, 72.3175);
+    locationManager.addLocation("Sheikhupura", 31.7131, 73.9783);
+    locationManager.addLocation("Rahim Yar Khan", 28.4199, 70.3030);
+
+    // Adding predefined weather variables
+    weatherVariableManager.addVariable("Temperature", 0.0);
+    weatherVariableManager.addVariable("Wind Speed", 0.0);
+
+    locationManager.listLocations();
+    weatherVariableManager.listVariables();
+
+    string city;
+    cout << "\nEnter a city name for weather forecast: ";
+    getline(cin, city);
+
+    // Fetch current weather data
+    weatherSystem.fetchWeatherData(city, weatherVariableManager);
+
+    // Fetch historical data
+    weatherSystem.fetchHistoricalData(city, locationManager, weatherVariableManager);
+
+    // Export data
+    exportToCSV(weatherVariableManager.getVariables());
+    exportToJSON(weatherVariableManager.getVariables());
+
+    return 0;
+} 
+
+   
+
+
+
