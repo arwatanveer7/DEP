@@ -173,7 +173,7 @@ private:
             weatherVariableManager.addVariable("Wind Speed", windSpeed);
 
             cout << "Weather Forecast:" << endl;
-            cout << "- Temperature: " << temperature << " °C" << endl;
+            cout << "- Temperature: " << temperature << " Â°C" << endl;
             cout << "- Wind Speed: " << windSpeed << " m/s" << endl;
         } else {
             cerr << "Failed to parse weather data." << endl;
